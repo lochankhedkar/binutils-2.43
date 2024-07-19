@@ -4647,4 +4647,74 @@ stack_unwind (char *buf, int size, void *bptr, void *eptr, ucontext_t *context, 
     }
   return ind * sizeof (__u64);
 }
+
+
+#elif ARCH(RISCV)
+static int
+stack_unwind (char *buf, int size, void *bptr, void *eptr, ucontext_t *context, int mode)
+{
+  if (buf && bptr && eptr && context && size + mode > 0)
+    getByteInstruction ((unsigned char *) eptr);
+  int ind = 0;
+  uint64_t *lbuf = (void *) buf;
+  int lsize = size / sizeof (uint64_t);
+  uint64_t pc = context->uc_mcontext.__gregs[REG_PC];
+  uint64_t sp = context->uc_mcontext.__gregs[REG_SP];
+  uint64_t stack_base;
+  unsigned long tbgn = 0;
+  unsigned long tend = 0;
+
+  unsigned long *sbase = (unsigned long*) __collector_tsd_get_by_key (unwind_key);
+  if (sbase && *sbase > sp)
+    stack_base = *sbase;
+  else
+    {
+      stack_base = sp + 0x100000;
+      if (stack_base < sp)  // overflow
+	stack_base = (uint64_t) -1;
+    }
+  DprintfT (SP_DUMP_UNWIND,
+    "unwind.c:%d stack_unwind %2d pc=0x%llx  sp=0x%llx  stack_base=0x%llx\n",
+    __LINE__, ind, (unsigned long long) pc, (unsigned long long) sp,
+    (unsigned long long) stack_base);
+
+  while (sp && pc)
+  {
+    DprintfT (SP_DUMP_UNWIND,
+	"unwind.c:%d stack_unwind %2d pc=0x%llx  sp=0x%llx\n",
+	__LINE__, ind, (unsigned long long) pc, (unsigned long long) sp);
+//      Dl_info dlinfo;
+//      if (!dladdr ((void *) pc, &dlinfo))
+//	break;
+//      DprintfT (SP_DUMP_UNWIND, "%2d: %llx <%s+%llu> (%s)\n",
+//		ind, (unsigned long long) pc,
+//		dlinfo.dli_sname ? dlinfo.dli_sname : "(?)",
+//		(unsigned long long) pc - (unsigned long long) dlinfo.dli_saddr,
+//		dlinfo.dli_fname);
+      lbuf[ind++] = pc;
+      if (ind >= lsize || sp >= stack_base || (sp & 15) != 0)
+	break;
+      if (pc < tbgn || pc >= tend)
+	if (!__collector_check_segment ((unsigned long) pc, &tbgn, &tend, 0))
+	  {
+	    DprintfT (SP_DUMP_UNWIND,
+		     "unwind.c:%d __collector_check_segment failed. sp=0x%lx\n",
+		      __LINE__, (unsigned long) sp);
+	    break;
+	  }
+      pc = ((uint64_t *) sp)[1];
+      uint64_t old_sp = sp;
+      sp = ((uint64_t *) sp)[0];
+      if (sp < old_sp)
+	break;
+    }
+  if (ind >= lsize)
+    {
+      ind = lsize - 1;
+      lbuf[ind++] = (uint64_t) SP_TRUNC_STACK_MARKER;
+    }
+  return ind * sizeof (uint64_t);
+}
 #endif /* ARCH() */
+
+
